@@ -1,3 +1,4 @@
+require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
@@ -10,7 +11,6 @@ const decoded = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
 );
 const serviceAccount = JSON.parse(decoded);
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
-require("dotenv").config();
 
 app.use(
   cors({
