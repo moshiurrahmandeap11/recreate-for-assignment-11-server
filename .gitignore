@@ -1,0 +1,4 @@
+node_modules
+.env
+.vercel
+coursion-service-key.json
