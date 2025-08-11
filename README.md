@@ -79,6 +79,7 @@ cp .env.example .env
 #username
 #password
 # JWT_SECRET=your_secret_key
+#FB_SECRET_KEY
 
 # 5. Start the server
 nodemon index.js
