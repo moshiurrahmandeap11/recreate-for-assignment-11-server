@@ -9,6 +9,25 @@ const admin = require("firebase-admin");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const Groq = require("groq-sdk");
 
+// SIMPLE CORS configuration - allow all origins
+app.use(cors({
+  origin: "*", // সব domain থেকে access allow
+  credentials: false // * থাকলে credentials true করা যায় না
+}));
+
+app.use(express.json());
+app.use(cookieParser());
+
+const uri = `mongodb+srv://${process.env.USER_DB}:${process.env.USER_PASS}@mdb.26vlivz.mongodb.net/?retryWrites=true&w=majority&appName=MDB`;
+
+const client = new MongoClient(uri, {
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: true,
+    deprecationErrors: true,
+  },
+});
+
 // Fix for service account parsing
 let serviceAccount;
 try {
@@ -28,25 +47,6 @@ try {
     serviceAccount = {};
   }
 }
-
-// SIMPLE CORS configuration - remove complex options
-app.use(cors({
-  origin: ["https://coursion-9faf6.web.app", "http://localhost:5173", "http://localhost:5174"],
-  credentials: true
-}));
-
-app.use(express.json());
-app.use(cookieParser());
-
-const uri = `mongodb+srv://${process.env.USER_DB}:${process.env.USER_PASS}@mdb.26vlivz.mongodb.net/?retryWrites=true&w=majority&appName=MDB`;
-
-const client = new MongoClient(uri, {
-  serverApi: {
-    version: ServerApiVersion.v1,
-    strict: true,
-    deprecationErrors: true,
-  },
-});
 
 // Initialize Firebase Admin only if serviceAccount is valid
 if (serviceAccount && serviceAccount.project_id) {
@@ -202,6 +202,12 @@ async function run() {
       console.log(`Using model: ${activeModel}`);
     }
 
+    // Root route - FIRST
+    app.get("/", (req, res) => {
+      console.log("GET / route hit");
+      res.send("Coursion is cooking");
+    });
+
     // jwt token related apis
     app.post("/jwt", async (req, res) => {
       const { email, token: firebaseToken } = req.body;
@@ -227,14 +233,14 @@ async function run() {
           expiresIn: "30d",
         });
 
-        res.cookie("token", accessToken, {
-          httpOnly: true,
-          secure: process.env.NODE_ENV === "production",
-          sameSite: process.env.NODE_ENV === "production" ? "None" : "Lax",
+        // Since we're using CORS *, we can't use httpOnly cookies
+        // Send token in response body instead
+        console.log("✅ JWT token created");
+        res.send({ 
+          success: true, 
+          token: accessToken,
+          message: "Login successful" 
         });
-
-        console.log("✅ JWT token sent via cookie");
-        res.send({ success: true });
       } catch (err) {
         console.error("Firebase token verification failed", err);
         res.status(401).send({ message: "Invalid Firebase token" });
@@ -274,8 +280,10 @@ async function run() {
       }
     });
 
-    // courses api
+    // courses api - FIXED
     app.get("/courses", async (req, res) => {
+      console.log("GET /courses route hit");
+      
       const authHeader = req.headers.authorization;
       let email;
 
@@ -285,6 +293,7 @@ async function run() {
         try {
           const decoded = await admin.auth().verifyIdToken(token);
           email = decoded.email;
+          console.log("User email from token:", email);
         } catch (err) {
           console.log("Invalid token. Serving public courses instead.");
         }
@@ -292,7 +301,11 @@ async function run() {
 
       try {
         const query = email ? { email } : {};
+        console.log("MongoDB query:", query);
+        
         const result = await coursionCoursesCollection.find(query).toArray();
+        console.log(`Found ${result.length} courses`);
+        
         res.send(result);
       } catch (err) {
         console.error("Error fetching courses", err);
@@ -302,6 +315,8 @@ async function run() {
 
     app.get("/courses/:id", async (req, res) => {
       const id = req.params.id;
+      console.log("GET /courses/:id route hit with id:", id);
+      
       try {
         const result = await coursionCoursesCollection.findOne({
           _id: new ObjectId(id),
@@ -311,6 +326,7 @@ async function run() {
         }
         res.send(result);
       } catch (err) {
+        console.error("Error fetching course:", err);
         res.status(500).send({ message: "Invalid ID format or server error" });
       }
     });
@@ -504,7 +520,6 @@ async function run() {
     });
 
     // Chatbot APIs
-    // Get user's chat history
     app.get("/api/chat/history", verifyFirebaseToken, async (req, res) => {
       const email = req.decoded.email;
 
@@ -512,7 +527,6 @@ async function run() {
         let chatSession = await coursionChatCollection.findOne({ email });
         
         if (!chatSession) {
-          // Create new chat session for user
           chatSession = {
             email,
             messages: [
@@ -540,7 +554,6 @@ async function run() {
       }
     });
 
-    // Send message to chatbot
     app.post("/api/chat", verifyFirebaseToken, async (req, res) => {
       const { message } = req.body;
       const email = req.decoded.email;
@@ -550,7 +563,6 @@ async function run() {
       }
 
       try {
-        // Get or create user's chat session
         let chatSession = await coursionChatCollection.findOne({ email });
         
         if (!chatSession) {
@@ -570,7 +582,6 @@ async function run() {
           await coursionChatCollection.insertOne(chatSession);
         }
 
-        // Add user message to chat history
         const userMessage = {
           id: chatSession.messages.length + 1,
           text: message,
@@ -578,16 +589,14 @@ async function run() {
           timestamp: new Date()
         };
 
-        // Get website context for the AI
         const websiteContext = await getWebsiteContext(
           coursionCoursesCollection, 
           coursionBannerCollection, 
           coursionTestimonialCollection
         );
 
-        // Prepare conversation history for AI context
         const conversationHistory = chatSession.messages
-          .slice(-10) // Last 10 messages for context
+          .slice(-10)
           .map(msg => ({
             role: msg.isBot ? "assistant" : "user",
             content: msg.text
@@ -614,7 +623,6 @@ Please provide helpful, accurate information about the courses, enrollment proce
 
         let botResponse = "I'm sorry, I couldn't process your request.";
         
-        // Only call Groq API if API key is available
         if (groq) {
           try {
             const completion = await groq.chat.completions.create({
@@ -644,7 +652,6 @@ Please provide helpful, accurate information about the courses, enrollment proce
           botResponse = "AI service is currently unavailable. Please try again later.";
         }
 
-        // Add bot response to chat history
         const botMessage = {
           id: chatSession.messages.length + 2,
           text: botResponse,
@@ -654,7 +661,6 @@ Please provide helpful, accurate information about the courses, enrollment proce
 
         const updatedMessages = [...chatSession.messages, userMessage, botMessage];
 
-        // Update chat session in database
         await coursionChatCollection.updateOne(
           { email },
           { 
@@ -727,11 +733,7 @@ Please provide helpful, accurate information about the courses, enrollment proce
 
 run().catch(console.dir);
 
-app.get("/", (req, res) => {
-  console.log("GET / route hit");
-  res.send("Coursion is cooking");
-});
-
 app.listen(port, () => {
   console.log(`Coursion is running on port ${port}`);
+  console.log(`CORS enabled for ALL origins (*)`);
 });
